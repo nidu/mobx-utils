@@ -1,20 +1,28 @@
-import {observable, action, ObservableMap, asMap, isObservableObject, isObservableArray, isObservableMap} from "mobx";
-import {invariant} from "./utils";
+import { observable, action, runInAction, computed, ObservableMap, asMap, map, isObservableObject, isObservableArray, isObservableMap } from "mobx";
+import { invariant } from "./utils";
 
 export interface IViewModel<T> {
     model: T;
     reset(): void;
     submit(): void;
     isDirty: boolean;
+    isDirtyDeep: boolean;
     isPropertyDirty(key: string): boolean;
 }
 
 const RESERVED_NAMES = ["model", "reset", "submit", "isDirty", "isPropertyDirty"];
 
+interface ViewedObject {
+    value: any
+    view: IViewModel<any>
+}
+
 class ViewModel<T> implements IViewModel<T> {
     @observable isDirty = false;
     localValues: ObservableMap<any> = asMap({});
     dirtyMap: ObservableMap<any> = asMap({});
+
+    viewedObjects = map<ViewedObject>();
 
     constructor(public model: T) {
         invariant(isObservableObject(model), "createViewModel expects an observable object");
@@ -26,55 +34,90 @@ class ViewModel<T> implements IViewModel<T> {
                 get: () => {
                     if (this.isPropertyDirty(key))
                         return this.localValues.get(key);
-                    else
-                        return (this.model as any)[key];
+                    else {
+                        const value = (this.model as any)[key];
+                        if (isObservableObject(value)) {
+                            return this.wrapObservableObject(key, value)
+                        } else {
+                            this.viewedObjects.delete(key)
+                        }
+                        return value
+                    }
                 },
                 set: action((value: any) => {
                     if (this.isPropertyDirty(key) || value !== (this.model as any)[key]) {
                         this.isDirty = true;
                         this.dirtyMap.set(key, true);
                         this.localValues.set(key, value);
+                        this.viewedObjects.delete(key);
                     }
                 })
             });
         });
     }
 
+    private wrapObservableObject(key: string, value: any) {
+        const viewedObject = this.viewedObjects.get(key)
+        if (viewedObject && value == viewedObject.value) {
+            return viewedObject.view
+        }
+        return runInAction(() => {
+            const view = createViewModel(value)
+            this.viewedObjects.set(key, {value, view})
+            return view
+        })
+    }
+
     isPropertyDirty(key: string): boolean {
         return this.dirtyMap.get(key) === true;
     }
 
+    @computed get isDirtyDeep() {
+        return this.isDirty || 
+            this.viewedObjects.values().some(({view}) => view.isDirtyDeep);
+    }
+
     @action submit() {
-        if (this.isDirty) {
-            this.isDirty = false;
-            this.dirtyMap.entries().forEach(([key, dirty]) => {
-                if (dirty === true) {
-                    const source = this.localValues.get(key);
-                    const destination = (this.model as any)[key];
-                    if (isObservableArray(destination)) {
-                        destination.replace(source);
-                    } else if (isObservableMap(destination)) {
-                        destination.clear();
-                        destination.merge(source);
-                    } else {
-                        (this.model as any)[key] = source;
+        if (this.isDirtyDeep) {
+            if (this.isDirty) {
+                this.isDirty = false;
+                this.dirtyMap.entries().forEach(([key, dirty]) => {
+                    if (dirty === true) {
+                        const source = this.localValues.get(key);
+                        const destination = (this.model as any)[key];
+                        if (isObservableArray(destination)) {
+                            destination.replace(source);
+                        } else if (isObservableMap(destination)) {
+                            destination.clear();
+                            destination.merge(source);
+                        } else if (isObservableObject(destination) && this.viewedObjects.has(key)) {
+                            this.viewedObjects.get(key).view.submit();
+                            this.viewedObjects.delete(key);
+                        } else {
+                            (this.model as any)[key] = source;
+                        }
+                        this.dirtyMap.set(key, false);
+                        this.localValues.delete(key);
                     }
-                    this.dirtyMap.set(key, false);
-                    this.localValues.delete(key);
-                }
-            });
+                });
+            }
+            this.viewedObjects.values().forEach(({view}) => view.submit());
+            this.viewedObjects.clear();
         }
     }
 
     @action reset() {
-        if (this.isDirty) {
-            this.isDirty = false;
-            this.dirtyMap.entries().forEach(([key, dirty]) => {
-                if (dirty === true) {
-                    this.dirtyMap.set(key, false);
-                    this.localValues.delete(key);
-                }
-            });
+        if (this.isDirtyDeep) {
+            if (this.isDirty) {
+                this.isDirty = false;
+                this.dirtyMap.entries().forEach(([key, dirty]) => {
+                    if (dirty === true) {
+                        this.dirtyMap.set(key, false);
+                        this.localValues.delete(key);
+                    }
+                });
+            }
+            this.viewedObjects.clear();
         }
     }
 }

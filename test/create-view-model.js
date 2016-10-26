@@ -112,3 +112,77 @@ test("create view model", t => {
     d2()
     t.end()
 })
+
+test("create view model deep object", t => {
+    function Todo(title, done, usersInterested, location) {
+        mobx.extendObservable(this, {
+            title: title,
+            done: done,
+            usersInterested: usersInterested,
+            location: location
+        });
+    }
+
+    const location = mobx.observable({
+        city: "London", 
+        street: "Baker Street", 
+        house: mobx.observable({
+            number: "221", 
+            building: "B"
+        })
+    })
+    const model = new Todo("coffee", false, ["Vader", "Madonna"], location);
+    const viewModel = utils.createViewModel(model);
+
+    mobx.runInAction(() => viewModel.location.city = "Liverpool");
+    t.equal(viewModel.location.city, "Liverpool");
+    t.equal(location.city, "London");
+    t.equal(viewModel.isPropertyDirty("location"), false);
+    t.equal(viewModel.isDirty, false);
+    t.equal(viewModel.isDirtyDeep, true);
+
+    viewModel.reset();
+    t.equal(viewModel.location.city, "London");
+    t.equal(viewModel.location.model, location);
+    t.equal(viewModel.isDirty, false);
+    t.equal(viewModel.isDirtyDeep, false);
+
+    mobx.runInAction(() => viewModel.location.city = "Liverpool");
+    viewModel.submit();
+    t.equal(viewModel.location.city, "Liverpool");
+    t.equal(location.city, "Liverpool");
+    t.equal(viewModel.isDirty, false);
+    t.equal(viewModel.isDirtyDeep, false);
+
+    mobx.runInAction(() => viewModel.location = mobx.observable({city: "Agraba"}));
+    t.equal(viewModel.location.city, "Agraba");
+    t.equal(viewModel.isDirtyDeep, true);
+
+    viewModel.reset();
+    t.equal(viewModel.location.city, "Liverpool");
+
+    mobx.runInAction(() => viewModel.location.house.number = "223");
+    t.equal(viewModel.location.house.number, "223");
+    t.equal(location.house.number, "221");
+    t.equal(viewModel.isDirtyDeep, true);
+
+    viewModel.submit();
+    t.equal(viewModel.location.house.number, "223");
+    t.equal(location.house.number, "223");
+    t.equal(viewModel.isDirtyDeep, false);
+
+    mobx.runInAction(() => viewModel.location.house = mobx.observable({number: "446", building: "A"}));
+    t.equal(viewModel.location.house.number, "446");
+    t.equal(viewModel.isDirtyDeep, true);
+
+    viewModel.reset();
+    t.equal(viewModel.location.house.number, "223");
+    t.equal(viewModel.isDirtyDeep, false);
+    
+    mobx.runInAction(() => viewModel.location.house = mobx.observable({number: "446", building: "A"}));
+    viewModel.submit();
+    t.equal(viewModel.location.house.number, "446");
+    t.equal(viewModel.isDirtyDeep, false);
+
+    t.end();
+})
